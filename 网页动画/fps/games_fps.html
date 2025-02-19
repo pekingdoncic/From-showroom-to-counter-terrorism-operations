@@ -1,0 +1,731 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<title>反恐行动-核材料库区</title>
+	<meta charset=utf-8 />
+	<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+	<link type="text/css" rel="stylesheet" href="./main.css">
+</head>
+
+<body>
+	<!-- 玩法提示 -->
+	<div id="info">
+		反恐精英-库区<br />
+		鼠标左键发射，WASD控制方向，空格键跳跃
+	</div>
+	<!-- 游戏界面 -->
+	<div id="container"><img id="gun" src="./P99_MW3.png" height="350" /></div>
+	<!-- 视频播放 -->
+	<canvas id="canvas"></canvas>
+	<audio id="global-audio" loop>
+		<source src="./music.mp3" type="audio/mpeg">
+		播放失败啦！
+	</audio>
+	<!-- 开枪声 -->
+	<audio src="./barreta2.mp3" id="barreta_sound"></audio>
+
+
+
+
+	<!-- 导入threejs标准库相关文件 -->
+	<script type="importmap">
+		{
+				"imports": {
+					"three": "./build/three.module.js",
+					"three/addons/": "./jsm/" 
+				}
+			}
+		</script>
+	<script type="module">
+		//参照官方案例，教学视频参考于https://www.bilibili.com/video/BV16e4y1v7Fq/?vd_source=2bc18895a668f425f052b0b147857904
+
+		//导入threejs标准库
+			import * as THREE from 'three';
+			//显示页面性能
+			import Stats from 'three/addons/libs/stats.module.js';
+			//创建场景时用这个很方便，教程来自https://blog.csdn.net/qq_53123067/article/details/130464263
+			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+			//threejs内置模型渲染，方便使用导入的gltf模型。gltf模型学习参照于https://blog.csdn.net/weixin_43081805/article/details/88672290
+			import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+			//三维空间对象数据结构-八叉树。参考于https://zhuanlan.zhihu.com/p/561641538?utm_id=0
+			import { Octree } from 'three/addons/math/Octree.js';
+			//胶囊体几何对象，方便碰撞体检测
+			import { Capsule } from 'three/addons/math/Capsule.js';
+			//可视化八叉树网格
+			import { OctreeHelper } from 'three/addons/helpers/OctreeHelper.js';
+	
+			//threejs内置方法，计算时间相关
+			const clock = new THREE.Clock();
+
+			//场景
+			const scene = new THREE.Scene();
+			scene.background = new THREE.Color( 0x88ccee );
+			scene.fog = new THREE.Fog( 0x88ccee, 0, 60 );
+
+			//相机，玩家视角
+			const camera = new THREE.PerspectiveCamera( 70, window.innerWidth / window.innerHeight, 0.1, 1000 );
+			camera.rotation.order = 'YXZ';
+
+
+			//背景音乐
+			window.addEventListener('load', function() {
+				const audio = document.getElementById('global-audio');
+				audio.play();
+				audio.loop = false;
+			});
+
+			//枪击声与手部抖动
+			var barreta_sound = document.getElementById('barreta_sound');
+			document.addEventListener('click', function(event){
+				barreta_sound.play();
+				gun.classList.add('shoot');
+				setTimeout(function() {
+					gun.classList.remove('shoot');
+				}, 400);
+
+
+				 // .offsetY、.offsetX以canvas画布左上角为坐标原点,单位px
+				const px = event.offsetX;
+				const py = event.offsetY;
+				//屏幕坐标px、py转WebGL标准设备坐标x、y
+				//width、height表示canvas画布宽高度
+				const x = (px / window.innerWidth) * 2 - 1;
+				const y = -(py / window.innerHeight) * 2 + 1;
+				//创建一个射线投射器`Raycaster`
+				const raycaster = new THREE.Raycaster();
+				//.setFromCamera()计算射线投射器`Raycaster`的射线属性.raywww
+				// 形象点说就是在点击位置创建一条射线，射线穿过的模型代表选中
+				raycaster.setFromCamera(new THREE.Vector2(x, y), camera);
+				const intersects = raycaster.intersectObjects(interactiveObjects, true);
+				
+				console.log(intersects);
+				intersects.forEach((Object) =>{
+					if(Object.object.parent.name === 'light' || Object.object.name === 'GunRack_Low_Material_#2_0'){
+						light.intensity = 0;
+					}
+				});
+			});
+
+
+
+			//光源
+			const directionalLight = new THREE.DirectionalLight( 0xffffff, 2.5 );
+			directionalLight.position.set( - 5, 25, - 1 );
+			directionalLight.castShadow = true;
+			directionalLight.shadow.camera.near = 0.01;
+			directionalLight.shadow.camera.far = 500;
+			directionalLight.shadow.camera.right = 30;
+			directionalLight.shadow.camera.left = - 30;
+			directionalLight.shadow.camera.top	= 30;
+			directionalLight.shadow.camera.bottom = - 30;
+			directionalLight.shadow.mapSize.width = 1024;
+			directionalLight.shadow.mapSize.height = 1024;
+			directionalLight.shadow.radius = 4;
+			directionalLight.shadow.bias = - 0.00006;
+			scene.add( directionalLight );
+
+		
+			const container = document.getElementById( 'container' );
+
+			//渲染器
+			const renderer = new THREE.WebGLRenderer( { antialias: true } ); //开启抗锯齿
+			renderer.setPixelRatio( window.devicePixelRatio );
+			renderer.setSize( window.innerWidth, window.innerHeight );
+			renderer.shadowMap.enabled = true;  //渲染阴影效果
+			renderer.shadowMap.type = THREE.VSMShadowMap;  //设置阴影类型
+			renderer.toneMapping = THREE.ACESFilmicToneMapping; //色调映射方式
+			renderer.useLegacyLights = false; //使用新版光照模型和材质
+			container.appendChild( renderer.domElement ); //渲染器画布给到网页元素
+	
+			//坐标辅助
+			// const axesHelper = new THREE.AxesHelper(100)
+			// scene.add(axesHelper)
+		
+		
+			//视频播放
+			document.getElementById("canvas").style.display = "none";
+			const video = document.createElement("video");
+			video.src = "./video/1.mp4"; // 替换为你的 MP4 文件路径
+			//设置静音，浏览器不允许无交互的音频播放
+			video.muted = true;
+			const planeGeometry = new THREE.PlaneGeometry(7, 7);
+			const videoTexture = new THREE.VideoTexture(video); // video 是你加载的 MP4 视频元素
+			const planeMaterial = new THREE.MeshBasicMaterial({ map: videoTexture ,side:THREE.DoubleSide});
+			const plane = new THREE.Mesh(planeGeometry, planeMaterial);
+			scene.add(plane);
+			plane.position.set(2.95,-1,2.3);
+			video.load();
+			video.play();
+
+
+		
+			
+
+			//GUI
+			const gui = new GUI();
+			gui.domElement.style.position = 'absolute';
+			gui.domElement.style.top = '0';
+			gui.domElement.style.left = '0';
+
+		
+
+			const GRAVITY = 50; //重力
+			const STEPS_PER_FRAME = 1;  //每帧的重力步数，就是每帧，重力影响下物体速度，位置的计算次数
+
+
+			const NUM_SPHERES = 100;  //球体数量
+			const SPHERE_RADIUS = 0.05; //球体半径
+
+			const sphereGeometry = new THREE.IcosahedronGeometry( SPHERE_RADIUS, 5 ); //创建球体，细分级别为5
+			const sphereMaterial = new THREE.MeshLambertMaterial( { color: 0xff0000 } ); //球体材质
+			const spheres = []; //球体数组
+			let sphereIdx = 0; //
+
+			for ( let i = 0; i < NUM_SPHERES; i ++ ) {
+
+				const sphere = new THREE.Mesh( sphereGeometry, sphereMaterial );
+				sphere.castShadow = true;  //球体阴影
+				sphere.receiveShadow = true; //球体接受阴影
+
+				scene.add( sphere );
+
+				//添加到球体数组里
+				spheres.push( {
+					mesh: sphere,
+					collider: new THREE.Sphere( new THREE.Vector3( 0, - 100, 0 ), SPHERE_RADIUS ),
+					velocity: new THREE.Vector3()
+				} );
+
+			}
+
+			const worldOctree = new Octree();  //三维空间数据结构-八叉树
+
+			//体积碰撞检测，避免穿模。创建一个胶囊体，参数为两端点位置，球体半径
+			const playerCollider = new Capsule( new THREE.Vector3( 0, 0.35, 0 ), new THREE.Vector3( 0, 1, 0 ), 0.35 );
+			const playerVelocity = new THREE.Vector3(); //速度
+			const playerDirection = new THREE.Vector3(); //方向
+			let playerOnFloor = false; //判断是否在地面
+
+			
+			let mouseTime = 0;
+			const keyStates = {};
+			const vector1 = new THREE.Vector3();
+			const vector2 = new THREE.Vector3();
+			const vector3 = new THREE.Vector3();
+
+			///鼠标
+			//点击鼠标
+			container.addEventListener( 'mousedown', () => {
+				//请求浏览器锁定鼠标，指针不会离开浏览器窗口
+				document.body.requestPointerLock();
+				//获取按下时间
+				mouseTime = performance.now();
+			} );
+			//松开鼠标
+			document.addEventListener( 'mouseup', () => {
+				//如果之前在窗口内点击，就发球
+				if ( document.pointerLockElement ) throwBall();
+			} );
+			document.body.addEventListener( 'mousemove', ( event ) => {
+				//鼠标指针是否锁定body，也就是是不是点击了页面
+				if ( document.pointerLockElement === document.body ) {
+					camera.rotation.y -= event.movementX / 500;
+					camera.rotation.x -= event.movementY / 500;
+				}
+			} );
+
+			///键盘
+			//按下键盘
+			//event是事件对象，触发时浏览器自动创建
+			document.addEventListener( 'keydown', ( event ) => {
+				//event.code 表示键盘数组上该键的值为true
+				keyStates[ event.code ] = true;
+			} );
+			//松开键盘
+			document.addEventListener( 'keyup', ( event ) => {
+				keyStates[ event.code ] = false;
+			} );
+
+
+			//监听浏览器窗口是否发生改变
+			window.addEventListener( 'resize', onWindowResize );
+			function onWindowResize() {
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+
+
+			//发射球
+			function throwBall() {
+				//获得一个球
+				const sphere = spheres[ sphereIdx ];
+				//获得相机朝向，并且赋值给该法线向量，也就是发射方向
+				camera.getWorldDirection( playerDirection );
+				//设置球的碰撞中心       
+				sphere.collider.center.copy( playerCollider.end ).addScaledVector( playerDirection, playerCollider.radius * 1.5 );
+				//impulse为冲量
+				const impulse = 15 + 30 * ( 1 - Math.exp( ( mouseTime - performance.now() ) * 0.001 ) );
+				//球速
+				sphere.velocity.copy( playerDirection ).multiplyScalar( impulse );
+				//球速与法线方向叠加
+				sphere.velocity.addScaledVector( playerVelocity,10 );
+
+				sphereIdx = ( sphereIdx + 1 ) % spheres.length; //准备下一发球
+
+			}
+
+
+			//玩家碰撞检测和处理
+			function playerCollisions() {
+
+				//该函数检测碰撞体是否发生了碰撞，碰撞返回碰撞点法线，否则返回false
+				const result = worldOctree.capsuleIntersect( playerCollider );
+
+				playerOnFloor = false;
+
+				if ( result ) {
+
+					//mormal表示碰撞的法线向量
+					playerOnFloor = result.normal.y > 0;
+
+				    if ( ! playerOnFloor ) {
+						
+						//反弹，第二个参数表示反弹的速度分量与法线向量点积的负数
+						playerVelocity.addScaledVector( result.normal, - result.normal.dot( playerVelocity ) );
+
+					}
+                    //移动碰撞体，距离为法线向量与碰撞深度相乘
+					playerCollider.translate( result.normal.multiplyScalar( result.depth ) );
+
+				}
+
+			}
+
+
+			//玩家运动
+			function updatePlayer( deltaTime ) {
+				//计算阻力，控制玩家运动停止或跳跃时的位置变化
+				let damping = Math.exp( - 4 * deltaTime ) - 1;
+
+				//跳起
+				if ( ! playerOnFloor ) {
+					//y向减速
+					playerVelocity.y -= GRAVITY * deltaTime;
+
+					//空中阻力，衰减系数缩小
+					damping *= 0.1;
+
+				}
+
+				//玩家速度向量与衰减系数的乘积添加到玩家的速度向量上，实现速度的衰减
+				playerVelocity.addScaledVector( playerVelocity, damping );
+
+				//位移量
+				const deltaPosition = playerVelocity.clone().multiplyScalar( deltaTime );
+				//改变玩家位置
+				playerCollider.translate( deltaPosition );
+			
+				//检测碰撞
+				playerCollisions();
+				//相机跟随玩家视角
+				camera.position.copy( playerCollider.end );
+
+			}
+
+
+			//玩家与球体碰撞
+			function playerSphereCollision( sphere ) {
+				//玩家碰撞器的中心
+				const center = vector1.addVectors( playerCollider.start, playerCollider.end ).multiplyScalar( 0.5 );
+				//球体碰撞器的中心
+				const sphere_center = sphere.collider.center;
+				//两者碰撞器半径和
+				const r = playerCollider.radius + sphere.collider.radius;
+				//半径和的平方
+				const r2 = r * r;
+
+				// approximation: player = 3 spheres
+
+				for ( const point of [ playerCollider.start, playerCollider.end, center ] ) {
+
+					const d2 = point.distanceToSquared( sphere_center );
+					//碰撞器重合，也就是碰撞
+					if ( d2 < r2 ) {
+
+						const normal = vector1.subVectors( point, sphere_center ).normalize();
+						const v1 = vector2.copy( normal ).multiplyScalar( normal.dot( playerVelocity ) );
+						const v2 = vector3.copy( normal ).multiplyScalar( normal.dot( sphere.velocity ) );
+						//更新碰撞后的速度
+						playerVelocity.add( v2 ).sub( v1 );
+						sphere.velocity.add( v1 ).sub( v2 );
+						//更新碰撞后球体的位置
+						const d = ( r - Math.sqrt( d2 ) ) / 2;
+						sphere_center.addScaledVector( normal, - d );
+
+					}
+
+				}
+
+			}
+			//球体碰撞检测和处理
+			function spheresCollisions() {
+
+				for ( let i = 0, length = spheres.length; i < length; i ++ ) {
+
+					const s1 = spheres[ i ];
+
+					for ( let j = i + 1; j < length; j ++ ) {
+
+						const s2 = spheres[ j ];
+
+						const d2 = s1.collider.center.distanceToSquared( s2.collider.center );
+						const r = s1.collider.radius + s2.collider.radius;
+						const r2 = r * r;
+
+						if ( d2 < r2 ) {
+
+							const normal = vector1.subVectors( s1.collider.center, s2.collider.center ).normalize();
+							const v1 = vector2.copy( normal ).multiplyScalar( normal.dot( s1.velocity ) );
+							const v2 = vector3.copy( normal ).multiplyScalar( normal.dot( s2.velocity ) );
+
+							s1.velocity.add( v2 ).sub( v1 );
+							s2.velocity.add( v1 ).sub( v2 );
+
+							const d = ( r - Math.sqrt( d2 ) ) / 2;
+
+							s1.collider.center.addScaledVector( normal, d );
+							s2.collider.center.addScaledVector( normal, - d );
+
+						}
+
+					}
+
+				}
+
+			}
+
+			//更新球的速度和位置
+			function updateSpheres( deltaTime ) {
+
+				spheres.forEach( sphere => {
+
+					sphere.collider.center.addScaledVector( sphere.velocity, deltaTime );
+
+					const result = worldOctree.sphereIntersect( sphere.collider );
+
+					if ( result ) {
+						//更新碰撞后的速度，实现反弹
+						sphere.velocity.addScaledVector( result.normal, - result.normal.dot( sphere.velocity ) * 1.5 );
+						//更新碰撞后的位置
+						sphere.collider.center.add( result.normal.multiplyScalar( result.depth ) );
+
+					} else {
+
+						sphere.velocity.y -= GRAVITY * deltaTime;
+
+					}
+
+					const damping = Math.exp( - 1.5 * deltaTime ) - 1;
+					sphere.velocity.addScaledVector( sphere.velocity, damping );
+
+					playerSphereCollision( sphere );
+
+				} );
+
+				spheresCollisions();
+
+				for ( const sphere of spheres ) {
+
+					sphere.mesh.position.copy( sphere.collider.center );
+
+				}
+
+			}
+
+			//玩家正方向
+			function getForwardVector() {
+				//玩家获得相机的方向
+				camera.getWorldDirection( playerDirection );
+				//下一行归一化不考虑y方向
+				playerDirection.y = 0;
+				playerDirection.normalize();
+
+				return playerDirection;
+
+			}
+			//玩家侧方向
+		    function getSideVector() {
+				//玩家获得相机的方向
+				camera.getWorldDirection( playerDirection );
+				playerDirection.y = 0;
+				playerDirection.normalize();
+				//叉乘，侧方向与玩家正方向与相机上方向所在平面垂直
+				playerDirection.cross( camera.up );
+
+				return playerDirection;
+
+			}
+
+			//deltaTime（表示帧间隔时间）、playerOnFloor（表示玩家是否在地面上）、keyStates（表示按键的状态）、getForwardVector（获取向前的向量）和getSideVector（获取侧面的向量）
+			function controls( deltaTime ) {
+
+				// gives a bit of air control
+				const speedDelta = deltaTime * ( playerOnFloor ? 25 : 8 );
+
+				//加速
+				if ( keyStates[ 'KeyW' ] ) {
+					playerVelocity.add( getForwardVector().multiplyScalar( speedDelta ) );
+
+				}
+				//减速
+				if ( keyStates[ 'KeyS' ] ) {
+
+					playerVelocity.add( getForwardVector().multiplyScalar( - speedDelta ) );
+
+				}
+				//左向加速
+				if ( keyStates[ 'KeyA' ] ) {
+
+					playerVelocity.add( getSideVector().multiplyScalar( - speedDelta ) );
+
+				}
+				//右向加速
+				if ( keyStates[ 'KeyD' ] ) {
+
+					playerVelocity.add( getSideVector().multiplyScalar( speedDelta ) );
+
+				}
+				//跳跃
+				if ( playerOnFloor ) {
+					if ( keyStates[ 'Space' ] ) {
+
+						playerVelocity.y = 15;
+
+					}
+
+				}
+
+			}
+
+
+			
+			let mixer = null;
+			const interactiveObjects = [];
+			// 创建灯光对象，照亮枪库内部
+			let light;
+			const modelPaths = ['cs_assault_with_real_light.glb','gun_rack.glb' ,'gun.glb' ,'mira.glb','light.glb'];
+			const loader = new GLTFLoader().setPath('./models/gltf/');
+
+			modelPaths.forEach((path) => {
+			loader.load(path, (gltf) => {
+				//枪架
+				if(path == 'gun_rack.glb'){
+					const modelScale = 0.02; // 缩小比例
+					const modelPosition = { x: 5, y: -5.9, z: -9.5 }; // 新位置
+					gltf.scene.scale.set(modelScale, modelScale, modelScale);
+					gltf.scene.position.set(modelPosition.x, modelPosition.y, modelPosition.z);
+					gltf.scene.rotation.set(0,Math.PI / 2,0);
+				
+				}
+				//枪
+				if(path == 'gun.glb'){
+					const modelScale = 0.01; // 缩小比例
+					const modelPosition = { x: 5, y: -6.76, z: -8.9 }; // 新位置
+					gltf.scene.scale.set(modelScale, modelScale, modelScale);
+					gltf.scene.position.set(modelPosition.x, modelPosition.y, modelPosition.z);
+					gltf.scene.rotation.set(0,Math.PI / 2,0);				
+				}
+				//npc
+				if(path == 'mira.glb'){
+					const modelPosition = { x: 6.1, y: -7, z: -8.5 }; // 新位置
+					const modelScale = 0.003; // 缩小比例
+					gltf.scene.position.set(modelPosition.x, modelPosition.y, modelPosition.z);
+					gltf.scene.rotation.set(0,-Math.PI/3,0);
+					gltf.scene.scale.set(modelScale, modelScale, modelScale);
+
+					//console.log('动画数据', gltf.animations);
+
+					 //包含关键帧动画的模型作为参数创建一个播放器
+					mixer = new THREE.AnimationMixer(gltf.scene);
+					//  获取gltf.animations[0]的第一个clip动画对象
+					const clipAction = mixer.clipAction(gltf.animations[0]); //创建动画clipAction对象
+					clipAction.timeScale = 80;//80倍速
+					clipAction.play(); //播放动画
+
+				}
+				if(path == 'light.glb'){
+					const modelScale = 0.03; // 缩小比例
+					const modelPosition = { x: 4.92, y: -5.4, z: -9.009}; // 新位置
+					gltf.scene.scale.set(modelScale, modelScale, modelScale);
+					gltf.scene.position.set(modelPosition.x, modelPosition.y, modelPosition.z);
+					gltf.scene.rotation.set(0,Math.PI / 2,0);
+					
+					gltf.scene.name = 'light';
+					
+
+					// const positionFolder = gui.addFolder('Position'); // 创建一个文件夹控件
+					// positionFolder.add(gltf.scene.position, 'x', -30, 30).name('X').step(0.0001); // 创建一个滑块控件，控制模型的x轴位置
+					// positionFolder.add(gltf.scene.position, 'y', -30, 30).name('Y').step(0.0001); // 创建一个滑块控件，控制模型的y轴位置
+					// positionFolder.add(gltf.scene.position, 'z', -20, 20).name('Z').step(0.0001); // 创建一个滑块控件，控制模型的z轴位置
+
+					// 创建灯光对象，照亮枪库内部
+					light = new THREE.DirectionalLight(0xffffff, 20); // 创建一个白色的平行光，强度为5
+					light.position.set(modelPosition.x, modelPosition.y+0.05, modelPosition.z); // 设置灯光的位置
+					scene.add(light);
+					light.target.position.set(modelPosition.x, modelPosition.y-2, modelPosition.z-0.2);
+					scene.add(light.target);
+				}
+
+				interactiveObjects.push(gltf.scene);
+
+				// 处理每个加载的模型
+				scene.add(gltf.scene);
+				//模型放入八叉树数据中
+				worldOctree.fromGraphNode(gltf.scene);
+
+				gltf.scene.traverse((child) => {
+				if (child.isMesh) {
+					child.castShadow = true;
+					child.receiveShadow = true;
+
+					if (child.material.map) {
+					child.material.map.anisotropy = 4;
+					}
+				}
+				});
+
+				// animate()函数可以进行适当的修改，以适应多个模型的动画循环
+				animate();
+			});
+			});
+
+			console.log(interactiveObjects);
+
+
+
+			//标靶
+			const targetGeometry = new THREE.CylinderGeometry(0.5, 0.5, 0.1, 32); // 创建一个圆柱体几何体
+			const biaoBaTextureLoader = new THREE.TextureLoader();
+			const biaoBaTexture = biaoBaTextureLoader.load('./biaoBa.jpg');
+
+			const targetMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff,map: biaoBaTexture,side:THREE.DoubleSide }); // 创建一个基础材质，设置为红色
+			const targetMesh = new THREE.Mesh(targetGeometry, targetMaterial);
+			scene.add(targetMesh);
+			 
+			targetMesh.rotation.set(0,0,Math.PI/2);
+			// const positionFolder = gui.addFolder('Position'); // 创建一个文件夹控件
+			// positionFolder.add(targetMesh.position, 'x', -30, 30).name('X'); // 创建一个滑块控件，控制模型的x轴位置
+			// positionFolder.add(targetMesh.position, 'y', -30, 30).name('Y'); // 创建一个滑块控件，控制模型的y轴位置
+			// positionFolder.add(targetMesh.position, 'z', -20, 20).name('Z'); // 创建一个滑块控件，控制模型的z轴位置
+			
+			targetMesh.position.set(26,-5,-5)
+
+
+			//雨天
+			const rainTexture = new THREE.TextureLoader().load("./rain.png");
+			const spriteMaterial = new THREE.SpriteMaterial({  //精灵材质
+				map: rainTexture, 
+			});
+			for (let i = 0; i < 5000; i++) {
+				// 精灵模型共享材质
+				const sprite = new THREE.Sprite(spriteMaterial);
+				sprite.scale.set(0.03, 0.03, 0.03);
+				scene.add(sprite);
+				// 设置精灵模型位置，在长方体空间上上随机分布
+				const x = 70 * (Math.random() - 0.5);
+				const y = 50 * (Math.random() - 0.5);
+				var z = 50 * (Math.random() - 0.5);
+				console.log(z);
+				if(z<-10)
+					z=50* (Math.random());
+				sprite.position.set(x, y, z)
+			}
+
+
+			//天空盒
+			var cubeloader = new THREE.CubeTextureLoader();
+			// 所有贴图在同一目录下，可以使用该方法设置共用路径
+			cubeloader.setPath('./lagoon/');
+			// 立方体纹理加载器返回立方体纹理对象CubeTexture
+			var urlPrefix = "lagoon_";
+			var CubeTexture = cubeloader.load([urlPrefix + "posx.jpg",  urlPrefix + "negx.jpg", urlPrefix + "posy.jpg", urlPrefix + "negy.jpg",  urlPrefix + "posz.jpg", urlPrefix + "negz.jpg"]);
+			scene.background = CubeTexture;
+
+
+
+		
+								
+
+			//玩家掉落
+		function teleportPlayerIfOob() {
+
+				if ( camera.position.y <= - 25 ) {
+
+					playerCollider.start.set( 0, 0.35, 0 );
+					playerCollider.end.set( 0, 1, 0 );
+					playerCollider.radius = 0.35;
+					camera.position.copy( playerCollider.end );
+					camera.rotation.set( 0, 0, 0 );
+
+				}
+
+		}
+
+
+		
+
+
+		function animate() {
+				requestAnimationFrame( animate );
+				
+				const deltaTime = Math.min( 0.05, clock.getDelta() ) / STEPS_PER_FRAME;
+
+			 //clock.getDelta()方法获得两次执行时间间隔
+			 const frameT = clock.getDelta();
+		
+			 if (mixer !== null) {
+				// 更新播放器相关的时间
+				mixer.update(clock.getDelta());
+			}
+				// we look for collisions in substeps to mitigate the risk of
+				// an object traversing another too quickly for detection.
+
+
+				for ( let i = 0; i < STEPS_PER_FRAME; i ++ ) {
+
+					controls( deltaTime );
+
+					updatePlayer( deltaTime );
+
+					updateSpheres( deltaTime );
+
+					teleportPlayerIfOob();
+				}
+
+				scene.children.forEach(sprite => {
+				if(sprite instanceof THREE.Sprite){
+					// 雨滴的y坐标每次减1
+					sprite.position.y -= 0.1;
+					if (sprite.position.y < -10) {
+						// 如果雨滴落到地面，重置y，从新下落
+						sprite.position.y = 20;
+					}
+				}
+			});
+
+				renderer.render( scene, camera );
+
+				// stats.update();
+
+
+		}
+		
+		</script>
+</body>
+
+</html>
